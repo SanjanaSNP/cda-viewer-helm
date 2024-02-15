@@ -1,0 +1,76 @@
+name: CDA-Viewer deployment - Prod
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        image: ["cda-viewer-fe", "cda-viewer", "pdf-reactor", "notes", "patient-connect", "tenant-manager", "utils"]
+
+    steps:
+      - name: Checkout source code 
+        uses: actions/checkout@v3
+
+      - name: ACR build
+        id: build-push-acr
+        uses: azure/acr-build@v1
+        with:
+          service_principal: ${{ secrets.service_principal }}
+          service_principal_password: ${{ secrets.service_principal_password }}
+          tenant: ${{ secrets.tenant }}
+          registry: ${{ secrets.registry }}
+          repository: ${{ secrets.repository }}
+          image: ${{ matrix.image }}
+          folder: app
+          branch: main
+          tag: ${{ github.sha }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: built-artifacts
+          path: |
+            app
+            cda-viewer
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        image: ["cda-viewer-fe", "cda-viewer", "pdf-reactor", "notes", "patient-connect", "tenant-manager", "utils"]
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: built-artifacts
+          
+      - name: Azure login
+        id: login
+        uses: azure/login@v1.4.3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        id: set-context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: '${{ secrets.resource_group }}' 
+          cluster-name: '${{ secrets.cluster_name }}'
+
+      - name: Helm tool installer
+        uses: Azure/setup-helm@v3
+        with:
+          version: 3.6.0
+
+      - name: Deploy Helm chart
+        run: |
+          helm upgrade --install "${{ matrix.image }}-chart" cda-viewer/ --atomic --namespace cda-app-ns \
+            --set image.repository=${{ secrets.registry }}.azurecr.io/${{ secrets.repository }}/${{ matrix.image }},image.tag=${{ github.sha }} \
+            --atomic --set changeCause=${{ github.sha }}
